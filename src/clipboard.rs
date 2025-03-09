@@ -34,11 +34,14 @@ use crate::pincer::{Pincer, SeatPincerMap};
 use crate::register::MimeType;
 use crate::seat::{ClipboardState, SeatData, SeatIdentifier};
 
+/// Enum for messages that can be passed to a [`Clipboard`] instance
 #[derive(Clone, Debug)]
 pub enum ClipboardMessage {
     OfferOnSeat(String),
     GrabSeat(WlSeat),
 }
+
+/// Transmitting end of a channel for passing messages to a [`Clipboard`] instance
 pub type ClipboardTx = broadcast::Sender<ClipboardMessage>;
 
 /// Struct that interfaces with the Wayland compositor
