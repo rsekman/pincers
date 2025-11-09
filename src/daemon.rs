@@ -253,7 +253,7 @@ impl Drop for Daemon {
 }
 
 fn get_directory() -> PathBuf {
-    let mut dir = PathBuf::from(env!("XDG_DATA_HOME"));
+    let mut dir = PathBuf::from(env!("XDG_RUNTIME_DIR"));
     dir.push(env!("CARGO_PKG_NAME"));
     dir
 }
