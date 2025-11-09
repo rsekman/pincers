@@ -219,14 +219,17 @@ impl Daemon {
             RequestType::List() => ResponseType::List(pincer.list()?),
             RequestType::Register(c) => {
                 use RegisterCommand::*;
-                match c {
-                    Clear {} => {
-                        pincer.set_active(RegisterAddress::default());
+                let addr = match c {
+                    Clear {} => Some(RegisterAddress::default()),
+                    Select { address } => Some(address),
+                    Active {} => None,
+                };
+                if let Some(addr) = addr {
+                    pincer.set_active(addr);
+                    if let Some(tx) = clipboard_tx {
+                        tx.send(ClipboardMessage::OfferOnSeat(seat.to_owned()))
+                            .map_err(|e| format!("Could not pass message to Clipboard: {e}"))?;
                     }
-                    Select { address } => {
-                        pincer.set_active(address);
-                    }
-                    Active {} => {}
                 };
                 ResponseType::Register(pincer.get_active())
             }
