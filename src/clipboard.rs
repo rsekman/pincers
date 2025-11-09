@@ -203,15 +203,15 @@ impl Clipboard {
             warn!("Received request from unknown seat {}", seat.id());
             return;
         };
-        let pincers = self.pincers.lock().unwrap();
-        let Some(pincer) = pincers.get(seat_name) else {
+        let mut pincers = self.pincers.lock().unwrap();
+        let Some(pincer) = pincers.get_mut(seat_name) else {
             warn!(
                 "Clipboard of seat {} = {seat_data} is not managed",
                 seat.id()
             );
             return;
         };
-        let reg = pincer.get_active_address();
+        let reg = pincer.get_active();
         debug!("Received request for {mime}, using {reg}",);
         match pincer.paste(&mime) {
             Some((_, mime, data)) => {
@@ -226,7 +226,8 @@ impl Clipboard {
             None => {
                 debug!("{mime} was not found in {reg}")
             }
-        }
+        };
+        pincer.reset_active();
     }
 
     /// Take ownership of the clipboards of all seats
@@ -333,10 +334,12 @@ impl Clipboard {
                 }
             }
         };
-        pincer
+        let s = pincer
             .yank(mimes.iter().filter_map(read_data))
             .map(|_| {})
-            .map_err(anyhow::Error::msg)
+            .map_err(anyhow::Error::msg);
+        pincer.reset_active();
+        s
     }
 
     fn offer(&mut self, name: &String) -> Result<(), Anyhow> {
@@ -372,7 +375,7 @@ impl Clipboard {
                 anyhow::bail!("Unmanaged seat");
             };
 
-            let address = pincer.get_active_address();
+            let address = pincer.get_active();
             let register = pincer.get_active_register();
             debug!("Offering data on {} ({name}) from {address}", seat.id());
 

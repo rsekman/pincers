@@ -7,8 +7,8 @@ use tokio::{signal::ctrl_c, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use pincers::client::{
-    handle_list, handle_paste, handle_show, handle_yank, send_request, OutputFormat,
-    ResponseHandler,
+    handle_list, handle_paste, handle_register, handle_show, handle_yank, send_request,
+    OutputFormat, ResponseHandler,
 };
 use pincers::clipboard::Clipboard;
 use pincers::daemon::{Daemon, RegisterCommand, Request, RequestType};
@@ -37,8 +37,8 @@ enum CliCommands {
 
     /// Yank from stdin into a register
     Yank {
-        #[arg( help = ADDRESS_HELP)]
-        address: Option<RegisterAddress>,
+        #[arg( help = ADDRESS_HELP, default_value = "\"")]
+        address: RegisterAddress,
         #[arg(
             long = "mime-type",
             short = 't',
@@ -58,8 +58,8 @@ enum CliCommands {
             default_values = ["text/plain; charset=utf-8", "text/plain", "text/*", "*/*"]
         )]
         mime: Vec<MimeType>,
-        #[arg(help = ADDRESS_HELP)]
-        address: Option<RegisterAddress>,
+        #[arg(help = ADDRESS_HELP, default_value = "\"")]
+        address: RegisterAddress,
         #[arg(
             long = "print-binary",
             short = 'p',
@@ -72,8 +72,8 @@ enum CliCommands {
 
     ///Summarize contents of a register
     Show {
-        #[arg(help = ADDRESS_HELP)]
-        address: Option<RegisterAddress>,
+        #[arg(help = ADDRESS_HELP, default_value = "\"")]
+        address: RegisterAddress,
     },
 
     /// List contents of all registers
@@ -132,7 +132,7 @@ async fn daemon() -> Result<(), Anyhow> {
     Ok(())
 }
 
-fn make_yank_request(addr: Option<RegisterAddress>, mime: MimeType) -> Result<RequestType, Anyhow> {
+fn make_yank_request(addr: RegisterAddress, mime: MimeType) -> Result<RequestType, Anyhow> {
     let mut stdin = stdin().lock();
     let mut buffer = Vec::new();
     stdin.read_to_end(&mut buffer)?;
@@ -166,10 +166,9 @@ async fn main() -> Result<(), Anyhow> {
                 RequestType::List(),
                 Box::new(move |r| handle_list(r, format)),
             ),
-            Register(RegisterArgs { command }) => (
-                RequestType::Register(command),
-                Box::new(|_| todo!("register")),
-            ),
+            Register(RegisterArgs { command }) => {
+                (RequestType::Register(command), Box::new(handle_register))
+            }
             Yank {
                 address,
                 mime,

@@ -137,3 +137,14 @@ pub fn handle_show(rsp: ResponseType) -> Result<(), Anyhow> {
         Err(Anyhow::msg(format!("Expected Show response, got {rsp:?}")))
     }
 }
+
+pub fn handle_register(rsp: ResponseType) -> Result<(), Anyhow> {
+    if let ResponseType::Register(addr) = rsp {
+        println!("{addr}");
+        Ok(())
+    } else {
+        Err(Anyhow::msg(format!(
+            "Expected Register response, got {rsp:?}"
+        )))
+    }
+}

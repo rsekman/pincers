@@ -10,7 +10,8 @@ use crate::seat::SeatIdentifier;
 #[derive(Debug)]
 pub struct Pincer {
     // The Pincer's currently active register
-    active: Option<RegisterAddress>,
+    active: RegisterAddress,
+    last_used: RegisterAddress,
     // To avoid moving data as yanks to "0 shift higher-numbered registers up, we will treat the
     // `numeric` array as a circular buffer. This is the offset in that circular buffer.
     pointer: NumericT,
@@ -24,7 +25,8 @@ impl Pincer {
     /// Create a new Pincer
     pub fn new() -> Self {
         Pincer {
-            active: None,
+            active: RegisterAddress::Unnamed,
+            last_used: RegisterAddress::Numeric(NumericT::new(0).unwrap()),
             pointer: NumericT::new(0).unwrap(),
             numeric: Default::default(),
             named: Default::default(),
@@ -32,45 +34,50 @@ impl Pincer {
     }
 
     /// Set the Pincer's register pointer
-    pub fn set(&mut self, addr: RegisterAddress) {
-        self.active = Some(addr);
+    pub fn set_active(&mut self, addr: RegisterAddress) {
+        self.active = addr;
     }
     /// Get the Pincer's register pointer
-    pub fn get(&self) -> Option<RegisterAddress> {
+    pub fn get_active(&self) -> RegisterAddress {
         self.active
+    }
+    pub fn reset_active(&mut self) {
+        self.set_active(RegisterAddress::default());
     }
 
     /// Get a register from a register address
     ///
     /// # Arguments
     ///
-    /// * `addr` -  address to the register. `None` means the default, `"0`
-    pub fn register(&self, addr: Option<RegisterAddress>) -> &Register {
-        let addr = addr.unwrap_or_default();
+    /// * `addr` -  address to the register.
+    pub fn register(&self, addr: RegisterAddress) -> &Register {
         use RegisterAddress::*;
         match addr {
             Numeric(n) => self
                 .numeric
                 .get(shift_backward(n, self.pointer).get() as usize),
             Named(n) => self.named.get(n.get() as usize),
+            Unnamed => Some(self.register(self.last_used)),
         }
         .unwrap()
     }
 
-    /// Get the address of the currently selected register
-    pub fn get_active_address(&self) -> RegisterAddress {
-        self.active.unwrap_or_default()
+    pub fn get_active_register(&self) -> &Register {
+        self.register(self.get_active())
     }
 
-    pub fn get_active_register(&self) -> &Register {
-        self.register(Some(self.get_active_address()))
+    fn resolve(&self, addr: RegisterAddress) -> RegisterAddress {
+        match addr {
+            RegisterAddress::Unnamed => self.last_used,
+            _ => addr,
+        }
     }
 
     /// Get the data contained in a register
     ///
     /// # Arguments
     ///
-    /// * `addr` -  address to the register to paste from. `None` means the default, `"0`
+    /// * `addr` -  address to the register to paste from. `Unnamed` means the last yank
     /// * `mime` -  MIME type to get
     ///
     /// # Returns
@@ -79,10 +86,10 @@ impl Pincer {
     /// that was actually used, `buffer` contains the data.  Otherwise `None`.
     pub fn paste_from<'a>(
         &'a self,
-        addr: Option<RegisterAddress>,
+        addr: RegisterAddress,
         mime: &'a MimeType,
     ) -> Option<(RegisterAddress, &'a MimeType, &'a Vec<u8>)> {
-        let raw_addr = addr.unwrap_or_default();
+        let raw_addr = self.resolve(addr);
         let (mime, res) = self.register(addr).get(mime)?;
         Some((raw_addr, mime, res))
     }
@@ -112,27 +119,33 @@ impl Pincer {
     ///
     /// # Arguments
     ///
-    /// * `addr` -  address to the register to paste from. `None` means the default, `"0`
+    /// * `addr` -  address to the register to paste from. Unnamed means the default, `"0`
     /// * `pastes` - an iterator over `(MIME, buffer)` tuples
     ///
     /// # Returns
     ///
     /// `Ok(n)` where `n` is the total number of bytes yanked if successful,
     /// otherwise `Err`.
-    pub fn yank_into<T>(&mut self, addr: Option<RegisterAddress>, pastes: T) -> Result<usize, Error>
+    pub fn yank_into<T>(
+        &mut self,
+        addr: RegisterAddress,
+        pastes: T,
+    ) -> Result<(RegisterAddress, usize), Error>
     where
         T: Iterator<Item = (MimeType, Vec<u8>)>,
     {
         use RegisterAddress::*;
-        let addr = addr.unwrap_or_default();
-        if let Numeric(_) = addr {
-            self.advance_pointer();
-        }
+        let z = NumericT::new(0).unwrap();
         let reg = match addr {
             Numeric(n) => self
                 .numeric
                 .get_mut(shift_backward(n, self.pointer).get() as usize),
             Named(n) => self.named.get_mut(n.get() as usize),
+            Unnamed => {
+                self.advance_pointer();
+                self.numeric
+                    .get_mut(shift_backward(z, self.pointer).get() as usize)
+            }
         }
         .unwrap();
         reg.clear();
@@ -142,8 +155,12 @@ impl Pincer {
             reg.insert(mime, data);
         }
 
-        debug!("Yanked {bytes} bytes into {addr}");
-        Ok(bytes)
+        self.last_used = match addr {
+            Unnamed => RegisterAddress::Numeric(z),
+            _ => addr,
+        };
+        debug!("Yanked {bytes} bytes into {}", self.last_used);
+        Ok((self.last_used, bytes))
     }
 
     /// Yank data of a single MIME type into a register
@@ -155,13 +172,13 @@ impl Pincer {
     ///
     /// # Returns
     ///
-    /// `Ok(n)` where `n` is the total number of bytes yanked if successful,
-    /// otherwise `Err`.
+    /// `Ok((addr, n))` where `addr` is the register that was used and `n` is the total number of
+    /// bytes yanked if successful, otherwise `Err`.
     pub fn yank_one_into(
         &mut self,
-        addr: Option<RegisterAddress>,
+        addr: RegisterAddress,
         (mime, data): (MimeType, Vec<u8>),
-    ) -> Result<usize, Error> {
+    ) -> Result<(RegisterAddress, usize), Error> {
         self.yank_into(addr, std::iter::once((mime, data)))
     }
 
@@ -173,9 +190,9 @@ impl Pincer {
     ///
     /// # Returns
     ///
-    /// `Ok(n)` where `n` is the total number of bytes yanked if successful,
-    /// otherwise `Err`.
-    pub fn yank<T>(&mut self, pastes: T) -> Result<usize, Error>
+    /// `Ok((addr, n))` where `addr` is the register that was used and `n` is the total number of
+    /// bytes yanked if successful, otherwise `Err`.
+    pub fn yank<T>(&mut self, pastes: T) -> Result<(RegisterAddress, usize), Error>
     where
         T: Iterator<Item = (MimeType, Vec<u8>)>,
     {
@@ -192,7 +209,10 @@ impl Pincer {
     ///
     /// `Ok(n)` where `n` is the total number of bytes yanked if successful,
     /// otherwise `Err`.
-    pub fn yank_one(&mut self, (mime, data): (MimeType, Vec<u8>)) -> Result<usize, Error> {
+    pub fn yank_one(
+        &mut self,
+        (mime, data): (MimeType, Vec<u8>),
+    ) -> Result<(RegisterAddress, usize), Error> {
         self.yank_one_into(self.active, (mime, data))
     }
 
@@ -204,20 +224,14 @@ impl Pincer {
     /// successful, otherwise `Err`.
     pub fn list(&self) -> Result<BTreeMap<RegisterAddress, RegisterSummary>, Error> {
         let mut out = BTreeMap::new();
+        //out.insert(RegisterAddress::Unnamed, )
         out.extend(RegisterAddress::iter().filter_map(|addr| {
-            match addr {
-                RegisterAddress::Numeric(n) => self
-                    .numeric
-                    .get(shift_backward(n, self.pointer).get() as usize),
-                RegisterAddress::Named(n) => self.named.get(n.get() as usize),
+            let r = self.register(addr);
+            if !r.is_empty() {
+                Some((addr, r.summarize()))
+            } else {
+                None
             }
-            .and_then(|r| {
-                if !r.is_empty() {
-                    Some((addr, r.summarize()))
-                } else {
-                    None
-                }
-            })
         }));
         Ok(out)
     }

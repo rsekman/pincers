@@ -207,22 +207,29 @@ impl Daemon {
     ) -> Response {
         let res = match req {
             RequestType::Yank(addr, reg) => {
-                let out = ResponseType::Yank(
-                    addr.unwrap_or_default(),
-                    pincer.yank_into(addr, reg.into_iter())?,
-                );
+                let (addr, n) = pincer.yank_into(addr, reg.into_iter())?;
                 if let Some(tx) = clipboard_tx {
                     tx.send(ClipboardMessage::OfferOnSeat(seat.to_owned()))
                         .map_err(|e| format!("Could not pass message to Clipboard: {e}"))?;
                 }
-                out
+                ResponseType::Yank(addr, n)
             }
             RequestType::Paste(addr, mimes) => get_paste(pincer, addr, &mimes)?,
-            RequestType::Show(addr) => {
-                ResponseType::Show(addr.unwrap_or_default(), pincer.register(addr).clone())
-            }
+            RequestType::Show(addr) => ResponseType::Show(addr, pincer.register(addr).clone()),
             RequestType::List() => ResponseType::List(pincer.list()?),
-            RequestType::Register(_) => todo!(),
+            RequestType::Register(c) => {
+                use RegisterCommand::*;
+                match c {
+                    Clear {} => {
+                        pincer.set_active(RegisterAddress::default());
+                    }
+                    Select { address } => {
+                        pincer.set_active(address);
+                    }
+                    Active {} => {}
+                };
+                ResponseType::Register(pincer.get_active())
+            }
         };
         Ok(res)
     }
@@ -230,7 +237,7 @@ impl Daemon {
 
 fn get_paste<'a, I: IntoIterator<Item = &'a MimeType>>(
     pincer: &mut Pincer,
-    addr: Option<RegisterAddress>,
+    addr: RegisterAddress,
     mimes: I,
 ) -> Response {
     mimes
@@ -299,13 +306,14 @@ pub struct Request {
 /// Possible requests to a [`Daemon`]. Each variant has a corresponding [`ResponseType`] variant for
 /// the response from the [`Daemon`].
 pub enum RequestType {
-    /// Yank into the the specified register address, or into `"0` if None
-    Yank(Option<RegisterAddress>, Register),
-    /// Paste from the the specified register address, or from `"0` if None, accepting specific
+    /// Yank into the the specified register address, or into `"0` if Unnamed
+    Yank(RegisterAddress, Register),
+    /// Paste from the the specified register address, or the previous yank if Unnamed, accepting specific
     /// MIME types
-    Paste(Option<RegisterAddress>, Vec<MimeType>),
-    /// Show all the contents of the specified register address, or of `"0` if None
-    Show(Option<RegisterAddress>),
+    Paste(RegisterAddress, Vec<MimeType>),
+    /// Show all the contents of the specified register address, or of the most recent yank if
+    /// Unnamed
+    Show(RegisterAddress),
     /// Like [`Show`](RequestType::Show), but for all registers
     List(),
     /// Manipulate the [`Daemon`]'s register pointer

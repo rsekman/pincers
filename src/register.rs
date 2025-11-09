@@ -5,11 +5,11 @@ use std::hash::Hash;
 use std::str::{self, FromStr};
 
 use bounded_integer::{BoundedI8, BoundedU8};
-use mediatype::{MediaType, MediaTypeBuf, ReadParams};
+use mediatype::{MediaTypeBuf, ReadParams};
 use nom::{
     branch::alt,
-    character::complete::satisfy,
-    combinator::{eof, map},
+    character::complete::{char, satisfy},
+    combinator::{eof, map, value},
     sequence::terminated,
     IResult, Parser,
 };
@@ -29,6 +29,8 @@ pub type NamedT = BoundedU8<0, { N_NAMED - 1 }>;
 /// Enum representing the name of a register, either numbered or named.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Ord, PartialOrd, Eq, PartialEq)]
 pub enum RegisterAddress {
+    /// The unnamed register, meaning the last used register
+    Unnamed,
     /// A numbered register (`"0, "1, ...`). The field is a range-limited integer from 0..=9.
     Numeric(NumericT),
     /// A named register (`"a, "b, ...`). The field is a range-limited integer from 0..=26.
@@ -38,7 +40,9 @@ pub enum RegisterAddress {
 impl RegisterAddress {
     /// Iterator over all register addresses, first the numbered, then the named.
     pub fn iter() -> impl Iterator<Item = Self> {
-        Self::iter_numeric().chain(Self::iter_named())
+        std::iter::once(Self::Unnamed)
+            .chain(Self::iter_numeric())
+            .chain(Self::iter_named())
     }
 
     /// Iterator over all numbered registered addresses
@@ -53,9 +57,9 @@ impl RegisterAddress {
 }
 
 impl Default for RegisterAddress {
-    /// The default register address is `"0`.
+    /// The default register is the unnamed register
     fn default() -> Self {
-        Self::Numeric(NumericT::new(0i8).unwrap())
+        Self::Unnamed
     }
 }
 impl Display for RegisterAddress {
@@ -67,11 +71,12 @@ impl Display for RegisterAddress {
         match self {
             Numeric(n) => write!(f, "{}", n),
             Named(n) => write!(f, "{}", ascii_shift('a', n.get()).unwrap()),
+            Unnamed => write!(f, "\""),
         }
     }
 }
 
-pub const ADDRESS_HELP: &str = "A character from [0-9a-z]";
+pub const ADDRESS_HELP: &str = "A character from [\"0-9a-z]";
 
 fn ascii_distance(a: char, b: char) -> Option<u8> {
     u8::try_from((a as u32) - (b as u32)).ok()
@@ -95,6 +100,7 @@ fn do_parse_address(input: &str) -> IResult<&str, RegisterAddress> {
         map(satisfy(|c| c.is_ascii_lowercase()), |c| {
             RegisterAddress::Named(ascii_distance(c, 'a').and_then(NamedT::new).unwrap())
         }),
+        value(RegisterAddress::Unnamed, char('"')),
     ))
     .parse(input)
 }
@@ -105,7 +111,9 @@ impl FromStr for RegisterAddress {
         terminated(do_parse_address, eof)
             .parse(input)
             .map(|(_, addr)| addr)
-            .map_err(|_| Anyhow::msg("Register address must be a single character from [0-9a-z]."))
+            .map_err(|_| {
+                Anyhow::msg("Register address must be a single character from [\"0-9a-z].")
+            })
     }
 }
 
