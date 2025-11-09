@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::str::{self, FromStr};
 
 use bounded_integer::{BoundedI8, BoundedU8};
-use mediatype::{MediaTypeBuf, ReadParams};
+use mediatype::{MediaType, MediaTypeBuf, ReadParams};
 use nom::{
     branch::alt,
     character::complete::satisfy,
@@ -61,7 +61,9 @@ impl Default for RegisterAddress {
 impl Display for RegisterAddress {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         use RegisterAddress::*;
-        write!(f, "\"")?;
+        if !f.alternate() {
+            write!(f, "\"")?;
+        }
         match self {
             Numeric(n) => write!(f, "{}", n),
             Named(n) => write!(f, "{}", ascii_shift('a', n.get()).unwrap()),
@@ -125,6 +127,21 @@ pub enum RegisterSummary {
     Text(String, usize),
     /// The register contains something else, summarize with its MIME type and length
     Blob(MimeType, usize),
+    Empty,
+}
+
+impl Display for RegisterSummary {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::Text(s, _) => write!(f, "{}", s.trim_end_matches(char::is_whitespace)),
+            Self::Blob(m, n) => write!(
+                f,
+                "blob ({m}, {})",
+                humanize_bytes::humanize_bytes_binary!(*n)
+            ),
+            Self::Empty => write!(f, "<EMPTY>"),
+        }
+    }
 }
 
 impl Register {
@@ -136,16 +153,23 @@ impl Register {
 
     /// Return a summary of the contents of this register.
     pub fn summarize(&self) -> RegisterSummary {
-        RegisterSummary::Text(
-            format!(
-                "{:?}",
-                self.get(&MediaTypeBuf::from_str("text/plain").unwrap())
-                    .map(|(_, v)| v.as_slice())
-                    .map(str::from_utf8)
-                    .and_then(Result::ok)
-            ),
-            0,
-        )
+        let text_types = vec!["text/plain; charset=utf-8", "text/plain", "text/*"];
+        if let Some((_, data)) = text_types
+            .iter()
+            .map(|s| MediaTypeBuf::from_str(s).unwrap())
+            .filter_map(|m| self.get(&m))
+            .next()
+        {
+            // TODO for now, assume text data is valid UTF-8
+            // TODO implement ellipsis
+            let s = String::from_utf8(data.clone()).unwrap();
+            let n = s.len();
+            RegisterSummary::Text(s, n)
+        } else if let Some((m, data)) = self.map.iter().next() {
+            RegisterSummary::Blob(m.clone(), data.len())
+        } else {
+            RegisterSummary::Empty
+        }
     }
 
     /// Clear all the data from this register
@@ -163,11 +187,11 @@ impl Register {
     }
 
     /// Get the data buffer corresponding to given MIME type
-    pub fn get<'a>(&'a self, mime: &'a MimeType) -> Option<(&'a MimeType, &'a DataBuffer)> {
+    pub fn get<'b, 'a>(&'a self, mime: &'b MimeType) -> Option<(&'a MimeType, &'a DataBuffer)> {
         let has_params = mime.params().count() > 0;
         if mime.subty() != "*" && has_params {
             // exact match
-            Option::zip(Some(mime), self.map.get(mime))
+            self.map.get_key_value(mime)
         } else if mime.subty() != "*" {
             // match by essence
             self.map.iter().find(|(m, _)| m.essence() == mime.essence())

@@ -8,13 +8,15 @@ use tokio::{signal::ctrl_c, task::JoinSet};
 use tokio_unix_ipc::channel_from_std;
 use tokio_util::sync::CancellationToken;
 
+use itertools::Itertools;
+
 use pincers::clipboard::Clipboard;
 use pincers::daemon::{
     socket_path, Daemon, RegisterCommand, Request, RequestType, Response, ResponseType,
 };
 use pincers::error::{Anyhow, Error};
 use pincers::pincer::SeatPincerMap;
-use pincers::register::{MimeType, Register, RegisterAddress, ADDRESS_HELP};
+use pincers::register::{MimeType, Register, RegisterAddress, RegisterSummary, ADDRESS_HELP};
 use pincers::seat::SeatSpecification;
 
 #[derive(ArgParser)]
@@ -25,6 +27,14 @@ struct CliOptions {
     log_level: spdlog::Level,
     #[command(subcommand)]
     command: CliCommands,
+}
+
+#[derive(clap::ValueEnum, Copy, Clone, Default)]
+enum OutputFormat {
+    #[default]
+    Plain,
+    JSON,
+    Rofi,
 }
 
 #[derive(Subcommand)]
@@ -77,7 +87,15 @@ enum CliCommands {
     },
 
     /// List contents of all registers
-    List {},
+    List {
+        #[arg(
+            long = "format",
+            short = 'f',
+            help = "Output format",
+            default_value = "plain"
+        )]
+        format: OutputFormat,
+    },
     // TODO: plain and json outputs
 }
 
@@ -186,6 +204,42 @@ fn handle_paste(rsp: ResponseType) -> Result<(), Anyhow> {
     }
 }
 
+fn list_plain<'a, R: IntoIterator<Item = (&'a RegisterAddress, &'a RegisterSummary)>>(
+    regs: R,
+) -> () {
+    println!(
+        "{}",
+        regs.into_iter()
+            .map(|(a, s)| format!("{a}: {s}"))
+            .join("\n")
+    );
+}
+
+fn list_rofi<'a, R: IntoIterator<Item = (&'a RegisterAddress, &'a RegisterSummary)>>(
+    regs: R,
+) -> () {
+    println!(
+        "{}",
+        regs.into_iter()
+            .map(|(a, s)| format!("{a:#}\0display\x1f{a}: {s}"))
+            .join("\n")
+    );
+}
+
+fn handle_list(rsp: ResponseType, format: OutputFormat) -> Result<(), Anyhow> {
+    if let ResponseType::List(ref regs) = rsp {
+        use OutputFormat::*;
+        match format {
+            Plain => list_plain(regs),
+            JSON => todo!("JSON output"),
+            Rofi => list_rofi(regs),
+        }
+        Ok(())
+    } else {
+        Err(Anyhow::msg(format!("Expected List response, got {rsp:?}")))
+    }
+}
+
 fn make_yank_request(addr: Option<RegisterAddress>, mime: MimeType) -> Result<RequestType, Anyhow> {
     let mut stdin = stdin().lock();
     let mut buffer = Vec::new();
@@ -216,7 +270,10 @@ async fn main() -> Result<(), Anyhow> {
                 Box::new(|r| handle_paste(r)),
             ),
             Show { address } => (RequestType::Show(address), Box::new(|_| todo!("show"))),
-            List {} => (RequestType::List(), Box::new(|_| todo!("list"))),
+            List { format } => (
+                RequestType::List(),
+                Box::new(move |r| handle_list(r, format)),
+            ),
             Register(RegisterArgs { command }) => (
                 RequestType::Register(command),
                 Box::new(|_| todo!("register")),
