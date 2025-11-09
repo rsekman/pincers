@@ -190,28 +190,27 @@ async fn main() -> Result<(), Anyhow> {
     use CliCommands::*;
     spdlog::default_logger().set_level_filter(spdlog::LevelFilter::MoreSevereEqual(args.log_level));
 
-    match args.command {
-        Daemon {} => daemon().await,
-        c => {
-            let seat = SeatSpecification::Unspecified;
-            let request = match c {
-                Paste {
-                    mime,
-                    address,
-                    output_binary: _,
-                    base64: _,
-                } => RequestType::Paste(address, mime),
-                Show { address } => RequestType::Show(address),
-                List {} => RequestType::List(),
-                Register(RegisterArgs { command }) => RequestType::Register(command),
-                Yank {
-                    address,
-                    mime,
-                    base64: _,
-                } => make_yank_request(address, mime)?,
-                Daemon {} => unreachable!(),
-            };
-            send_request(Request { seat, request }).await
-        }
+    if let Daemon {} = args.command {
+        daemon().await
+    } else {
+        let seat = SeatSpecification::Unspecified;
+        let request = match args.command {
+            Paste {
+                mime,
+                address,
+                output_binary: _,
+                base64: _,
+            } => RequestType::Paste(address, mime),
+            Show { address } => RequestType::Show(address),
+            List {} => RequestType::List(),
+            Register(RegisterArgs { command }) => RequestType::Register(command),
+            Yank {
+                address,
+                mime,
+                base64: _,
+            } => make_yank_request(address, mime)?,
+            Daemon {} => unreachable!(),
+        };
+        send_request(Request { seat, request }).await
     }
 }
