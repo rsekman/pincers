@@ -240,6 +240,29 @@ fn handle_list(rsp: ResponseType, format: OutputFormat) -> Result<(), Anyhow> {
     }
 }
 
+fn handle_show(rsp: ResponseType) -> Result<(), Anyhow> {
+    if let ResponseType::Show(_, ref reg) = rsp {
+        println!(
+            "{}",
+            reg.into_iter()
+                .map(|(m, d)| if m.ty() == "text" {
+                    format!(
+                        "{m}: {}",
+                        std::str::from_utf8(d)
+                            .unwrap()
+                            .trim_end_matches(char::is_whitespace)
+                    )
+                } else {
+                    format!("{m}: {}", humanize_bytes::humanize_bytes_binary!(d.len()))
+                })
+                .join("\n")
+        );
+        Ok(())
+    } else {
+        Err(Anyhow::msg(format!("Expected Show response, got {rsp:?}")))
+    }
+}
+
 fn make_yank_request(addr: Option<RegisterAddress>, mime: MimeType) -> Result<RequestType, Anyhow> {
     let mut stdin = stdin().lock();
     let mut buffer = Vec::new();
@@ -269,7 +292,7 @@ async fn main() -> Result<(), Anyhow> {
                 RequestType::Paste(address, mime),
                 Box::new(|r| handle_paste(r)),
             ),
-            Show { address } => (RequestType::Show(address), Box::new(|_| todo!("show"))),
+            Show { address } => (RequestType::Show(address), Box::new(handle_show)),
             List { format } => (
                 RequestType::List(),
                 Box::new(move |r| handle_list(r, format)),
