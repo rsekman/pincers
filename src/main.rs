@@ -124,7 +124,13 @@ async fn daemon() -> Result<(), Anyhow> {
     Ok(())
 }
 
-async fn send_request(req: Request) -> Result<(), Anyhow> {
+type ResponseHandler = dyn Fn(ResponseType) -> Result<(), Anyhow>;
+
+use std::ops::Deref;
+async fn send_request<H: Deref<Target = ResponseHandler>>(
+    req: Request,
+    handler: H,
+) -> Result<(), Anyhow> {
     let sp = socket_path();
     let (tx, rx) = UnixStream::connect(&sp)
         .and_then(channel_from_std::<Request, Response>)
@@ -140,39 +146,44 @@ async fn send_request(req: Request) -> Result<(), Anyhow> {
         error!("Could not transmit request: {e}");
         e
     })?;
-    let req = rx.recv().await.map_err(|e| {
-        error!("Could not send request to daemon: {e}");
-        e
-    })?;
-    handle_response(req).map_err(Anyhow::msg)
+    let rsp = rx
+        .recv()
+        .await
+        .map_err(|e| {
+            error!("Could not receive from daemon: {e}");
+            e
+        })?
+        .map_err(|e| {
+            error!("Error from daemon: {e}");
+            Anyhow::msg(e)
+        })?;
+    handler(rsp).map_err(Anyhow::msg)
 }
 
-fn handle_response(rsp: Response) -> Result<(), Error> {
-    debug!("Received response: {rsp:?}");
-    use ResponseType::*;
-    match rsp? {
-        Yank(addr, resp) => handle_yank(addr, resp),
-        Paste(_, mime, data) => handle_paste(&mime, &data),
-        _ => Ok(()),
+fn handle_yank(rsp: ResponseType) -> Result<(), Anyhow> {
+    if let ResponseType::Yank(addr, n) = rsp {
+        info!("Yanked {n} bytes into {addr}");
+        Ok(())
+    } else {
+        Err(Anyhow::msg(format!("Expected Yank response, got {rsp:?}")))
     }
 }
 
-fn handle_yank(addr: RegisterAddress, n: usize) -> Result<(), Error> {
-    info!("Yanked {n} bytes into {addr}");
-    Ok(())
-}
-
-fn handle_paste(_mime: &MimeType, data: &[u8]) -> Result<(), Error> {
-    let mut stdout = stdout();
-    stdout
-        .write_all(data)
-        .map_err(|e| format!("I/O error: {e}"))?;
-    if stdout.is_terminal() {
+fn handle_paste(rsp: ResponseType) -> Result<(), Anyhow> {
+    if let ResponseType::Paste(_, _, ref data) = rsp {
+        let mut stdout = stdout();
         stdout
-            .write("\n".as_bytes())
-            .map_err(|e| format!("I/O error: {e}"))?;
+            .write_all(data)
+            .map_err(|e| Anyhow::msg(format!("I/O error: {e}")))?;
+        if stdout.is_terminal() {
+            stdout
+                .write("\n".as_bytes())
+                .map_err(|e| Anyhow::msg(format!("I/O error: {e}")))?;
+        }
+        Ok(())
+    } else {
+        Err(Anyhow::msg(format!("Expected Paste response, got {rsp:?}")))
     }
-    Ok(())
 }
 
 fn make_yank_request(addr: Option<RegisterAddress>, mime: MimeType) -> Result<RequestType, Anyhow> {
@@ -194,23 +205,29 @@ async fn main() -> Result<(), Anyhow> {
         daemon().await
     } else {
         let seat = SeatSpecification::Unspecified;
-        let request = match args.command {
+        let (request, handler): (RequestType, Box<ResponseHandler>) = match args.command {
             Paste {
                 mime,
                 address,
                 output_binary: _,
                 base64: _,
-            } => RequestType::Paste(address, mime),
-            Show { address } => RequestType::Show(address),
-            List {} => RequestType::List(),
-            Register(RegisterArgs { command }) => RequestType::Register(command),
+            } => (
+                RequestType::Paste(address, mime),
+                Box::new(|r| handle_paste(r)),
+            ),
+            Show { address } => (RequestType::Show(address), Box::new(|_| todo!("show"))),
+            List {} => (RequestType::List(), Box::new(|_| todo!("list"))),
+            Register(RegisterArgs { command }) => (
+                RequestType::Register(command),
+                Box::new(|_| todo!("register")),
+            ),
             Yank {
                 address,
                 mime,
                 base64: _,
-            } => make_yank_request(address, mime)?,
+            } => (make_yank_request(address, mime)?, Box::new(handle_yank)),
             Daemon {} => unreachable!(),
         };
-        send_request(Request { seat, request }).await
+        send_request(Request { seat, request }, handler).await
     }
 }
