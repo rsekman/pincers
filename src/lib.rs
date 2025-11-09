@@ -2,6 +2,8 @@
 //! The documentation here covers the internal workings of the clipboard manager. For how to use
 //! `pince.rs`, refer to the manpage
 
+/// Client-side
+pub mod client;
 /// Interact with the Wayland compositor
 pub mod clipboard;
 /// Manage IPC
