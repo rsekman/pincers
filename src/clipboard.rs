@@ -214,7 +214,7 @@ impl Clipboard {
         let reg = pincer.get_active_address();
         debug!("Received request for {mime}, using {reg}",);
         match pincer.paste(&mime) {
-            Ok(data) => {
+            Some((_, mime, data)) => {
                 let mut target_file: File = fd.into();
                 match target_file.write(data) {
                     Ok(n) => {
@@ -223,8 +223,8 @@ impl Clipboard {
                     Err(e) => warn!("Could not send data: {e}"),
                 }
             }
-            Err(e) => {
-                trace!("{e}")
+            None => {
+                debug!("{mime} was not found in {reg}")
             }
         }
     }
@@ -293,7 +293,7 @@ impl Clipboard {
             data.set_clipboard_state(ClipboardState::Source(source.clone()));
             if let Some(mimes) = self.offers.get(&offer) {
                 for mime in mimes.keys() {
-                    source.offer(mime.clone());
+                    source.offer(mime.to_string());
                 }
             }
             if let Some(ref d) = data.device {
@@ -320,7 +320,7 @@ impl Clipboard {
             anyhow::Error::msg(format!("No pincer found for {seat}"))
         })?;
 
-        let read_data = |(mime, mut f): (&String, &PipeReader)| {
+        let read_data = |(mime, mut f): (&MimeType, &PipeReader)| {
             let mut data = Vec::new();
             match f.read_to_end(&mut data) {
                 Ok(n) => {
@@ -382,7 +382,9 @@ impl Clipboard {
             let data = self.seats.get_mut(&seat).unwrap();
             data.set_clipboard_state(ClipboardState::Source(source.clone()));
             for mime in register.keys() {
-                source.offer(mime.clone());
+                // MediaTypeBuf has a .to_string() method, but it's not guaranteed to round-trip.
+                // This is a clone of the underlying String, so it round-trips.
+                source.offer(mime.as_str().to_string());
             }
             if let Some(ref d) = data.device {
                 d.set_selection(Some(&source));
@@ -620,7 +622,12 @@ impl Dispatch<ZwlrDataControlSourceV1, WlSeat> for Clipboard {
         match event {
             // This event is received when someone wants to paste our data. We are provided with a
             // file descriptor and simply write the data to it.
-            Send { mime_type, fd } => state.send(seat, mime_type, fd),
+            // Malformed Mime types are ignored!
+            Send { mime_type, fd } => {
+                if let Ok(m) = MimeType::from_string(mime_type) {
+                    state.send(seat, m, fd);
+                }
+            }
             // This event is received when someone else has copied to indicate that we now don't own the
             // clipboard. We need to grab the clipboard back and receive the new newly copied data.
             Cancelled {} => {
@@ -660,7 +667,9 @@ impl Dispatch<ZwlrDataControlOfferV1, ()> for Clipboard {
                 match pipe() {
                     Ok((reader, writer)) => {
                         offer.receive(mime_type.clone(), writer.as_fd());
-                        pipes.insert(mime_type, reader);
+                        if let Ok(m) = MimeType::from_string(mime_type) {
+                            pipes.insert(m, reader);
+                        }
                     }
                     Err(e) => error!("Could not create pipe to receive data: {e}"),
                 }

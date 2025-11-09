@@ -1,8 +1,11 @@
+use std::borrow::Borrow;
 use std::collections::{hash_map::Keys, HashMap};
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
 use std::str::{self, FromStr};
 
 use bounded_integer::{BoundedI8, BoundedU8};
+use mediatype::{MediaTypeBuf, ReadParams};
 use nom::{
     branch::alt,
     character::complete::satisfy,
@@ -106,7 +109,7 @@ impl FromStr for RegisterAddress {
 
 /// Type alias to identify a MIME type. Could possibly change to something more sophisticated in
 /// the future.
-pub type MimeType = String;
+pub type MimeType = MediaTypeBuf;
 type DataBuffer = Vec<u8>;
 
 /// A `Register` is a map from MIME types to buffers containing the data of the respective MIME types
@@ -136,8 +139,8 @@ impl Register {
         RegisterSummary::Text(
             format!(
                 "{:?}",
-                self.get(&String::from("text/plain"))
-                    .map(Vec::as_slice)
+                self.get(&MediaTypeBuf::from_str("text/plain").unwrap())
+                    .map(|(_, v)| v.as_slice())
                     .map(str::from_utf8)
                     .and_then(Result::ok)
             ),
@@ -160,12 +163,33 @@ impl Register {
     }
 
     /// Get the data buffer corresponding to given MIME type
-    pub fn get(&self, mime: &MimeType) -> Option<&DataBuffer> {
-        self.map.get(mime)
+    pub fn get<'a>(&'a self, mime: &'a MimeType) -> Option<(&'a MimeType, &'a DataBuffer)> {
+        let has_params = mime.params().count() > 0;
+        if mime.subty() != "*" && has_params {
+            // exact match
+            Option::zip(Some(mime), self.map.get(mime))
+        } else if mime.subty() != "*" {
+            // match by essence
+            self.map.iter().find(|(m, _)| m.essence() == mime.essence())
+        } else if mime.ty() != "*" {
+            // match by type, eg image/* matches image/png
+            self.map.iter().find(|(m, _)| m.ty() == mime.ty())
+        } else {
+            // */* -- pick the first type
+            self.map.iter().next()
+        }
     }
 
     pub fn keys(&self) -> Keys<'_, MimeType, DataBuffer> {
         self.map.keys()
+    }
+
+    pub fn has_mime<Q>(&self, mime: &Q) -> bool
+    where
+        MimeType: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        return self.map.contains_key(mime);
     }
 }
 

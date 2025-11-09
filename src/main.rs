@@ -45,19 +45,29 @@ enum CliCommands {
             help = "The MIME type of the content",
             default_value = "text/plain"
         )]
-        mime: String,
+        mime: MimeType,
+        #[arg(long = "base64", short = 'b', help = "Decode input as base64")]
+        base64: bool,
     },
     /// Paste from a register to stdout
     Paste {
         #[arg(
             long = "mime-type",
             short = 't',
-            help = "The MIME type to request",
-            default_value = "text/plain"
+            help = "A MIME type to accept. Pass multiple times, in order of preference, to accept multiple types. `type/*` means all subtypes of `type`, `*/*` means accept any type.",
+            default_values = ["text/plain; charset=utf-8", "text/plain", "text/*", "*/*"]
         )]
-        mime: String,
-        #[arg( help = ADDRESS_HELP)]
+        mime: Vec<MimeType>,
+        #[arg(help = ADDRESS_HELP)]
         address: Option<RegisterAddress>,
+        #[arg(
+            long = "print-binary",
+            short = 'p',
+            help = "Print binary data to stdout, even if it is a terminal"
+        )]
+        output_binary: bool,
+        #[arg(long = "base64", short = 'b', help = "Print binary data as base64")]
+        base64: bool,
     },
 
     ///Summarize contents of a register
@@ -142,7 +152,7 @@ fn handle_response(rsp: Response) -> Result<(), Error> {
     use ResponseType::*;
     match rsp? {
         Yank(addr, resp) => handle_yank(addr, resp),
-        Paste(_, data) => handle_paste(&data),
+        Paste(_, mime, data) => handle_paste(&mime, &data),
         _ => Ok(()),
     }
 }
@@ -152,7 +162,7 @@ fn handle_yank(addr: RegisterAddress, n: usize) -> Result<(), Error> {
     Ok(())
 }
 
-fn handle_paste(data: &[u8]) -> Result<(), Error> {
+fn handle_paste(_mime: &MimeType, data: &[u8]) -> Result<(), Error> {
     let mut stdout = stdout();
     stdout
         .write_all(data)
@@ -185,11 +195,20 @@ async fn main() -> Result<(), Anyhow> {
         c => {
             let seat = SeatSpecification::Unspecified;
             let request = match c {
-                Paste { mime, address } => RequestType::Paste(address, mime),
+                Paste {
+                    mime,
+                    address,
+                    output_binary: _,
+                    base64: _,
+                } => RequestType::Paste(address, mime),
                 Show { address } => RequestType::Show(address),
                 List {} => RequestType::List(),
                 Register(RegisterArgs { command }) => RequestType::Register(command),
-                Yank { address, mime } => make_yank_request(address, mime)?,
+                Yank {
+                    address,
+                    mime,
+                    base64: _,
+                } => make_yank_request(address, mime)?,
                 Daemon {} => unreachable!(),
             };
             send_request(Request { seat, request }).await

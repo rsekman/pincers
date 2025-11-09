@@ -75,17 +75,16 @@ impl Pincer {
     ///
     /// # Returns
     ///
-    /// If the MIME type exists in the register, `Ok(buffer)` where `buffer` contains the data.
-    /// Otherwise `Err`.
-    pub fn paste_from(
-        &self,
+    /// If the MIME type exists in the register, `Some((addr, buffer))` where `addr` is the register
+    /// that was actually used, `buffer` contains the data.  Otherwise `None`.
+    pub fn paste_from<'a>(
+        &'a self,
         addr: Option<RegisterAddress>,
-        mime: &MimeType,
-    ) -> Result<&Vec<u8>, Error> {
+        mime: &'a MimeType,
+    ) -> Option<(RegisterAddress, &'a MimeType, &'a Vec<u8>)> {
         let raw_addr = addr.unwrap_or_default();
-        self.register(addr).get(mime).ok_or(format!(
-            "Register {raw_addr:?} does not contain MIME type {mime}"
-        ))
+        let (mime, res) = self.register(addr).get(mime)?;
+        Some((raw_addr, mime, res))
     }
 
     /// Get data from the currently active register
@@ -98,7 +97,10 @@ impl Pincer {
     ///
     /// If the MIME type exists in the register, `Ok(buffer)` where `buffer` contains the data.
     /// Otherwise `Err`.
-    pub fn paste(&self, mime: &MimeType) -> Result<&Vec<u8>, Error> {
+    pub fn paste<'a>(
+        &'a self,
+        mime: &'a MimeType,
+    ) -> Option<(RegisterAddress, &'a MimeType, &'a Vec<u8>)> {
         self.paste_from(self.active, mime)
     }
 
@@ -158,7 +160,7 @@ impl Pincer {
     pub fn yank_one_into(
         &mut self,
         addr: Option<RegisterAddress>,
-        (mime, data): (String, Vec<u8>),
+        (mime, data): (MimeType, Vec<u8>),
     ) -> Result<usize, Error> {
         self.yank_into(addr, std::iter::once((mime, data)))
     }
@@ -190,7 +192,7 @@ impl Pincer {
     ///
     /// `Ok(n)` where `n` is the total number of bytes yanked if successful,
     /// otherwise `Err`.
-    pub fn yank_one(&mut self, (mime, data): (String, Vec<u8>)) -> Result<usize, Error> {
+    pub fn yank_one(&mut self, (mime, data): (MimeType, Vec<u8>)) -> Result<usize, Error> {
         self.yank_one_into(self.active, (mime, data))
     }
 

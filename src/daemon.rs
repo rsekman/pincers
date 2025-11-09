@@ -217,10 +217,7 @@ impl Daemon {
                 }
                 out
             }
-            RequestType::Paste(addr, mime) => ResponseType::Paste(
-                addr.unwrap_or_default(),
-                pincer.paste_from(addr, &mime)?.clone(),
-            ),
+            RequestType::Paste(addr, mimes) => get_paste(pincer, addr, &mimes)?,
             RequestType::Show(addr) => {
                 ResponseType::Show(addr.unwrap_or_default(), pincer.register(addr).clone())
             }
@@ -229,6 +226,21 @@ impl Daemon {
         };
         Ok(res)
     }
+}
+
+fn get_paste<'a, I: IntoIterator<Item = &'a MimeType>>(
+    pincer: &mut Pincer,
+    addr: Option<RegisterAddress>,
+    mimes: I,
+) -> Response {
+    mimes
+        .into_iter()
+        .filter_map(|m| pincer.paste_from(addr, m))
+        .map(|(addr, mime, data)| ResponseType::Paste(addr, mime.clone(), data.clone()))
+        .next()
+        .ok_or(format!(
+            "Register does not contain any of the requested MIME types"
+        ))
 }
 
 impl Drop for Daemon {
@@ -289,9 +301,9 @@ pub struct Request {
 pub enum RequestType {
     /// Yank into the the specified register address, or into `"0` if None
     Yank(Option<RegisterAddress>, Register),
-    /// Paste from the the specified register address, or from `"0` if None, requesting a specific
-    /// MIME type
-    Paste(Option<RegisterAddress>, MimeType),
+    /// Paste from the the specified register address, or from `"0` if None, accepting specific
+    /// MIME types
+    Paste(Option<RegisterAddress>, Vec<MimeType>),
     /// Show all the contents of the specified register address, or of `"0` if None
     Show(Option<RegisterAddress>),
     /// Like [`Show`](RequestType::Show), but for all registers
@@ -312,11 +324,19 @@ pub enum ResponseType {
     /// yanked.
     Yank(RegisterAddress, usize),
     /// Contains the register address from the which data was pasted, and a buffer for the data
-    Paste(RegisterAddress, Vec<u8>),
+    Paste(RegisterAddress, MimeType, Vec<u8>),
     /// Contains the register address which shown, and a map of MIME types to data buffers
     Show(RegisterAddress, Register),
     /// Contains a map of register addresses to summaries of their contents
     List(BTreeMap<RegisterAddress, RegisterSummary>),
     /// Contains the [`Daemon`]'s new register pointer
     Register(RegisterAddress),
+}
+
+/// MIME type handling for yanking.
+#[derive(Clone, Eq, PartialEq, Debug, Hash, Serialize, Deserialize)]
+pub enum YankMime {
+    /// Detect the MIME type automatically from the data using libmagic.
+    Autodetect,
+    Specific(MimeType),
 }
